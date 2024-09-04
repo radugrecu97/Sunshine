@@ -234,10 +234,6 @@ namespace platf::dxgi {
     return 0;
   }
 
-  bool
-  wgc_capture_t::test_capture(int adapter_index, adapter_t &adapter, int output_index, output_t &output) {
-    return true;
-  }
 
   /**
    * @brief Get the next frame from the Windows.Graphics.Capture API and copy it into a new snapshot texture.

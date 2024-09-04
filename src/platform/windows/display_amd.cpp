@@ -45,6 +45,7 @@ namespace platf::dxgi {
    */
   capture_e
   amd_capture_t::next_frame(std::chrono::milliseconds timeout, amf::AMFData** out) {
+    BOOST_LOG(error) << "Running next_frame";
     // this CONSUMER runs in the capture thread
     // Poll for the next frame
     AMF_RESULT result;
@@ -79,19 +80,30 @@ namespace platf::dxgi {
     DXGI_ADAPTER_DESC adapter_desc;
     display->adapter->GetDesc(&adapter_desc);
 
+    amf::AMFTrace* traceAMF;
+    amf_factory->GetTrace(&traceAMF);
+    traceAMF->SetGlobalLevel(AMF_TRACE_DEBUG);
+    traceAMF->EnableWriter(AMF_TRACE_WRITER_FILE, true);
+    traceAMF->SetWriterLevel(AMF_TRACE_WRITER_FILE, AMF_TRACE_DEBUG);
+    traceAMF->SetPath(L"D:/amflog.txt");
+
+    amf::AMFDebug* debugAMF;
+    amf_factory->GetDebug(&debugAMF);
+    debugAMF->AssertsEnable(false);
+
     // Bail if this is not an AMD GPU
     if (adapter_desc.VendorId != 0x1002) {
       return -1;
     }
 
-    BOOST_LOG(info) << "### framerate " << config.framerate << " dynamicRange " << config.dynamicRange;
+    // BOOST_LOG(info) << "### framerate " << config.framerate << " dynamicRange " << config.dynamicRange;
 
-    // FIXME: Don't use Direct Capture for a SDR P010 stream. The output is very dim.
-    // This seems like a possible bug in VideoConverter when upconverting 8-bit to 10-bit.
-    if (config.dynamicRange && !display->is_hdr()) {
-      BOOST_LOG(info) << "AMD Direct Capture is disabled while 10-bit stream is in SDR mode"sv;
-      return -1;
-    }
+    // // FIXME: Don't use Direct Capture for a SDR P010 stream. The output is very dim.
+    // // This seems like a possible bug in VideoConverter when upconverting 8-bit to 10-bit.
+    // if (config.dynamicRange && !display->is_hdr()) {
+    //   BOOST_LOG(info) << "AMD Direct Capture is disabled while 10-bit stream is in SDR mode"sv;
+    //   return -1;
+    // }
 
     // Create the capture context
     auto result = amf_factory->CreateContext(&context);
@@ -103,9 +115,17 @@ namespace platf::dxgi {
 
     // Associate the context with our ID3D11Device. This will enable multithread protection on the device.
     result = context->InitDX11(display->device.get());
+    BOOST_LOG(error) << "############  InitDX11() pointer: " << &(display->device);
     if (result != AMF_OK) {
       BOOST_LOG(error) << "InitDX11() failed: "sv << result;
       return -1;
+    }
+
+    if (config.dynamicRange) {
+      display->capture_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    }
+    else {
+      display->capture_format = DXGI_FORMAT_B8G8R8A8_UNORM;
     }
 
     // Create the DisplayCapture component
@@ -117,7 +137,7 @@ namespace platf::dxgi {
 
     // Set parameters for non-blocking capture
     captureComp->SetProperty(AMF_DISPLAYCAPTURE_MONITOR_INDEX, output_index);
-    captureComp->SetProperty(AMF_DISPLAYCAPTURE_FRAMERATE, AMFConstructRate(config.framerate, 1));
+    captureComp->SetProperty(AMF_DISPLAYCAPTURE_FRAMERATE, AMFConstructRate(120, 1));
     captureComp->SetProperty(AMF_DISPLAYCAPTURE_MODE, AMF_DISPLAYCAPTURE_MODE_WAIT_FOR_PRESENT);
 
     // Initialize capture
@@ -127,11 +147,29 @@ namespace platf::dxgi {
       return -1;
     }
 
-    captureComp->GetProperty(AMF_DISPLAYCAPTURE_FORMAT, &(capture_format));
+    // amf::AMFSurfacePtr out;
+
+    // do {
+    //   result = captureComp->QueryOutput((amf::AMFData**) &out);
+    //   if (result == AMF_REPEAT) {
+    //     // Check for capture timeout expiration
+    //     Sleep(1);
+    //   }
+    // } while (result != AMF_OK);
+
+    // if (result != AMF_OK) {
+    //   BOOST_LOG(error) << "DisplayCapture::QueryOutput() failed: "sv << result;
+    // }
+
+
+
+    // captureComp->GetProperty(AMF_DISPLAYCAPTURE_FORMAT, &(capture_format));
     captureComp->GetProperty(AMF_DISPLAYCAPTURE_RESOLUTION, &(resolution));
 
     BOOST_LOG(info) << "Desktop resolution ["sv << resolution.width << 'x' << resolution.height << ']';
-    BOOST_LOG(info) << "Desktop format ["sv << capture_format << ']';
+    // BOOST_LOG(info) << "Desktop format ["sv << capture_format << ']';
+
+
 
 
     BOOST_LOG(info) << "Using AMD Direct Capture API for display capture"sv;

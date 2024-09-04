@@ -251,6 +251,7 @@ namespace platf::dxgi {
           sleep_overshoot_logger.second_point_now_and_log();
 
           status = snapshot(pull_free_image_cb, img_out, 0ms, *cursor);
+          BOOST_LOG(debug) << "^^^ #01";
 
           if (status == capture_e::ok && img_out) {
             frame_pacing_group_frames += 1;
@@ -265,6 +266,7 @@ namespace platf::dxgi {
       // Start new frame pacing group if necessary, snapshot() is called with non-zero timeout
       if (status == capture_e::timeout || (status == capture_e::ok && !frame_pacing_group_start)) {
         status = snapshot(pull_free_image_cb, img_out, 200ms, *cursor);
+        BOOST_LOG(debug) << "^^^ #02";
 
         if (status == capture_e::ok && img_out) {
           frame_pacing_group_start = img_out->frame_timestamp;
@@ -299,6 +301,7 @@ namespace platf::dxgi {
       }
 
       switch (status) {
+        BOOST_LOG(debug) << "^^^ capture status: " << (int) status;
         case platf::capture_e::reinit:
         case platf::capture_e::error:
         case platf::capture_e::interrupted:
@@ -324,6 +327,7 @@ namespace platf::dxgi {
       }
     }
 
+    BOOST_LOG(debug) << "^^^ #05";
     return capture_e::ok;
   }
 
@@ -486,16 +490,6 @@ namespace platf::dxgi {
   }
 
 
-  bool
-  display_base_t::test_capture(int adapter_index, adapter_t &adapter, int output_index, output_t &output) {
-    return dxgi::test_dxgi_duplication(adapter, output, false);
-  }
-
-  bool
-  duplication_t::test_capture(int adapter_index, adapter_t &adapter, int output_index, output_t &output) {
-    return dxgi::test_dxgi_duplication(adapter, output, false);
-  }
-
   int
   display_base_t::init(const ::video::config_t &config, const std::string &display_name) {
     std::once_flag windows_cpp_once_flag;
@@ -557,7 +551,7 @@ namespace platf::dxgi {
             continue;
           }
 
-          if (desc.AttachedToDesktop && test_capture(x, adapter_tmp, y, output_tmp)) {
+          if (desc.AttachedToDesktop && test_dxgi_duplication(adapter_tmp, output_tmp, false)) {
             output_index = y;
             output = std::move(output_tmp);
 
@@ -635,6 +629,8 @@ namespace platf::dxgi {
       &device,
       &feature_level,
       &device_ctx);
+
+    BOOST_LOG(error) << "######## DisplayBase device pointer: " << &(device);
 
     adapter_p->Release();
 

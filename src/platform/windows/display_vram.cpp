@@ -1017,6 +1017,18 @@ namespace platf::dxgi {
       D3D11_TEXTURE2D_DESC desc;
       src->GetDesc(&desc);
 
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc Width: " << desc.Width;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc Height: " << desc.Height;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc MipLevels: " << desc.MipLevels;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc ArraySize: " << desc.ArraySize;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc Format: " << desc.Format;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc SampleDesc.Count: " << desc.SampleDesc.Count;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc SampleDesc.Quality: " << desc.SampleDesc.Quality;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc Usage: " << desc.Usage;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc BindFlags: " << desc.BindFlags;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc CPUAccessFlags: " << desc.CPUAccessFlags;
+      BOOST_LOG(debug) << "D3D11 Texture2D Desc MiscFlags: " <<  desc.MiscFlags;
+
       // It's possible for our display enumeration to race with mode changes and result in
       // mismatched image pool and desktop texture sizes. If this happens, just reinit again.
       if (desc.Width != width_before_rotation || desc.Height != height_before_rotation) {
@@ -1416,79 +1428,6 @@ namespace platf::dxgi {
     return 0;
   }
 
-  bool
-  test_direct_capture(amf::AMFFactory *amf_factory, adapter_t &adapter, int output_index) {
-    D3D_FEATURE_LEVEL featureLevels[] {
-      D3D_FEATURE_LEVEL_11_1,
-      D3D_FEATURE_LEVEL_11_0,
-      D3D_FEATURE_LEVEL_10_1,
-      D3D_FEATURE_LEVEL_10_0,
-      D3D_FEATURE_LEVEL_9_3,
-      D3D_FEATURE_LEVEL_9_2,
-      D3D_FEATURE_LEVEL_9_1
-    };
-
-    DXGI_ADAPTER_DESC adapter_desc;
-    adapter->GetDesc(&adapter_desc);
-
-    // Bail if this is not an AMD GPU
-    if (adapter_desc.VendorId != 0x1002) {
-      return false;
-    }
-
-    device_t device;
-    auto status = D3D11CreateDevice(
-      adapter.get(),
-      D3D_DRIVER_TYPE_UNKNOWN,
-      nullptr,
-      D3D11_CREATE_DEVICE_FLAGS,
-      featureLevels, sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
-      D3D11_SDK_VERSION,
-      &device,
-      nullptr,
-      nullptr);
-    if (FAILED(status)) {
-      BOOST_LOG(error) << "Failed to create D3D11 device for AMD Direct Capture test [0x"sv << util::hex(status).to_string_view() << ']';
-      return false;
-    }
-
-    // Initialize the capture context
-    amf::AMFContextPtr context;
-    auto result = amf_factory->CreateContext(&context);
-    if (result != AMF_OK) {
-      BOOST_LOG(error) << "CreateContext() failed: "sv << result;
-      return false;
-    }
-
-    // Associate the context with our ID3D11Device
-    result = context->InitDX11(device.get());
-    if (result != AMF_OK) {
-      BOOST_LOG(error) << "InitDX11() failed: "sv << result;
-      return false;
-    }
-
-    // Create the DisplayCapture component
-    amf::AMFComponentPtr captureComp;
-    result = amf_factory->CreateComponent(context, AMFDisplayCapture, &captureComp);
-    if (result != AMF_OK) {
-      BOOST_LOG(error) << "AMFCreateComponentDisplayCapture(AMFDisplayCapture) failed: "sv << result;
-      return false;
-    }
-
-    // Capture the specified output
-    captureComp->SetProperty(AMF_DISPLAYCAPTURE_MONITOR_INDEX, 0);
-    captureComp->SetProperty(AMF_DISPLAYCAPTURE_FRAMERATE, AMFConstructRate(0, 1));
-    captureComp->SetProperty(AMF_DISPLAYCAPTURE_MODE, AMF_DISPLAYCAPTURE_MODE_WAIT_FOR_PRESENT);
-
-    // Initialize captureComp
-    result = captureComp->Init(amf::AMF_SURFACE_UNKNOWN, 0, 0);
-    if (result != AMF_OK) {
-      BOOST_LOG(error) << "DisplayCapture::Init() failed: "sv << result;
-      return false;
-    }
-
-    return true;
-  }
 
   int
   display_amd_vram_t::init(const ::video::config_t &config, const std::string &display_name) {
@@ -1533,16 +1472,14 @@ namespace platf::dxgi {
     }
 
     if (display_base_t::init(config, display_name) || dup.init(this, config, output_index))
+    {
+      BOOST_LOG(error) << "AMD VRAM() failed";
       return -1;
+    }
 
     return 0;
   }
 
-
-  bool
-  display_amd_vram_t::test_capture(int adapter_index, adapter_t &adapter, int output_index, output_t &output) {
-    return true;
-  }
 
   amf::AMF_SURFACE_FORMAT
   pix_fmt_to_amf_fmt(pix_fmt_e pix_fmt) {
@@ -1559,168 +1496,6 @@ namespace platf::dxgi {
     }
   }
 
-  class amf_d3d_avcodec_encode_device_t: public avcodec_encode_device_t, public amf::AMFSurfaceObserver {
-  public:
-    int
-    init(std::shared_ptr<platf::display_t> display, pix_fmt_e pix_fmt) {
-      this->display = std::static_pointer_cast<display_amd_vram_t>(display);
-
-      // Share the ID3D11Device object with the capture pipeline
-      this->data = this->display->device.get();
-
-      // Create the VideoConverter component
-      auto result = this->display->dup.amf_factory->CreateComponent(this->display->dup.context, AMFVideoConverter, &converter);
-      if (result != AMF_OK) {
-        BOOST_LOG(error) << "CreateComponent(VideoConverter) failed: "sv << result;
-        return -1;
-      }
-
-      converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_FORMAT, pix_fmt_to_amf_fmt(pix_fmt));
-      converter->SetProperty(AMF_VIDEO_CONVERTER_COMPUTE_DEVICE, amf::AMF_MEMORY_DX11);
-      converter->SetProperty(AMF_VIDEO_CONVERTER_MEMORY_TYPE, amf::AMF_MEMORY_DX11);
-      converter->SetProperty(AMF_VIDEO_CONVERTER_SCALE, AMF_VIDEO_CONVERTER_SCALE_BICUBIC);
-      converter->SetProperty(AMF_VIDEO_CONVERTER_KEEP_ASPECT_RATIO, true);
-      converter->SetProperty(AMF_VIDEO_CONVERTER_FILL, true);
-      converter->SetProperty(AMF_VIDEO_CONVERTER_FILL_COLOR, AMFConstructColor(0x00, 0x00, 0x00, 0xFF));
-
-      return 0;
-    }
-
-    int
-    convert(platf::img_t &img_base) override {
-      auto &img = (img_amd_t &) img_base;
-
-      // If the input format changed, (re)initialize the converter
-      if (last_input_format != img.surface->GetFormat()) {
-        BOOST_LOG(info) << "AMF VideoConverter input format change: "sv << last_input_format << " -> "sv << img.surface->GetFormat();
-        display->dup.capture_format = last_input_format = img.surface->GetFormat();
-
-        converter->Terminate();
-        auto result = converter->Init(last_input_format, display->dup.resolution.width, display->dup.resolution.height);
-        if (result != AMF_OK) {
-          BOOST_LOG(error) << "VideoConverter::Init() failed: "sv << result;
-          return -1;
-        }
-      }
-
-      // Submit the RGB frame for YUV conversion
-      auto result = converter->SubmitInput(img.surface);
-      if (result != AMF_OK) {
-        BOOST_LOG(error) << "VideoConverter::SubmitInput() failed: "sv << result;
-        return -1;
-      }
-
-      // Get the converted output YUV frame. We expect this to block until the output is available.
-      amf::AMFSurfacePtr output;
-      result = converter->QueryOutput((amf::AMFData **) &output);
-      if (result != AMF_OK) {
-        BOOST_LOG(error) << "VideoConverter::QueryOutput() failed: "sv << result;
-        return -1;
-      }
-
-      // Copy the converted frame into our AVFrame-backed surface
-      result = output->CopySurfaceRegion(hwframe_surface, 0, 0, 0, 0, hwframe->width, hwframe->height);
-      if (result != AMF_OK) {
-        BOOST_LOG(error) << "CopySurfaceRegion() failed: "sv << result;
-        return -1;
-      }
-
-      return 0;
-    }
-
-    void
-    apply_colorspace() override {
-      switch (colorspace.colorspace) {
-        case ::video::colorspace_e::rec601:
-          converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_COLOR_PRIMARIES, AMF_COLOR_PRIMARIES_SMPTE170M);
-          converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_TRANSFER_CHARACTERISTIC, AMF_COLOR_TRANSFER_CHARACTERISTIC_SMPTE170M);
-          break;
-        case ::video::colorspace_e::rec709:
-          converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_COLOR_PRIMARIES, AMF_COLOR_PRIMARIES_BT709);
-          converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_TRANSFER_CHARACTERISTIC, AMF_COLOR_TRANSFER_CHARACTERISTIC_BT709);
-          break;
-        case ::video::colorspace_e::bt2020sdr:
-          converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_COLOR_PRIMARIES, AMF_COLOR_PRIMARIES_BT2020);
-          converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_TRANSFER_CHARACTERISTIC, AMF_COLOR_TRANSFER_CHARACTERISTIC_BT2020_10);
-          break;
-        case ::video::colorspace_e::bt2020:
-          BOOST_LOG(error) << "SETTING BT2020 COLOR SPACE";
-          converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_COLOR_PRIMARIES, AMF_COLOR_PRIMARIES_BT2020);
-          converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_TRANSFER_CHARACTERISTIC, AMF_COLOR_TRANSFER_CHARACTERISTIC_SMPTE2084);
-          converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_HDR_METADATA, AMF_COLOR_TRANSFER_CHARACTERISTIC_SMPTE170M);
-          break;
-      }
-
-      converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_COLOR_RANGE, colorspace.full_range ? AMF_COLOR_RANGE_FULL : AMF_COLOR_RANGE_STUDIO);
-    }
-
-    void
-    init_hwframes(AVHWFramesContext *frames) override {
-      if (frames->device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
-        auto d3d11_frames = (AVD3D11VAFramesContext *) frames->hwctx;
-
-        // The VideoConverter requires shared textures to use CopySurfaceRegion()
-        d3d11_frames->MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-      }
-
-      // We require a single texture
-      frames->initial_pool_size = 1;
-    }
-
-    int
-    set_frame(AVFrame *frame, AVBufferRef *hw_frames_ctx) override {
-      this->hwframe.reset(frame);
-      this->frame = frame;
-
-      // Populate this frame with a hardware buffer if one isn't there already
-      if (!frame->buf[0]) {
-        auto err = av_hwframe_get_buffer(hw_frames_ctx, frame, 0);
-        if (err) {
-          char err_str[AV_ERROR_MAX_STRING_SIZE] { 0 };
-          BOOST_LOG(error) << "Failed to get hwframe buffer: "sv << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, err);
-          return -1;
-        }
-      }
-
-      // Wrap the frame's ID3D11Texture2D in an AMFSurface object
-      auto result = display->dup.context->CreateSurfaceFromDX11Native(frame->data[0], &hwframe_surface, this);
-      if (result != AMF_OK) {
-        BOOST_LOG(error) << "CreateSurfaceFromDX11Native() failed: "sv << result;
-        return -1;
-      }
-
-      converter->SetProperty(AMF_VIDEO_CONVERTER_OUTPUT_SIZE, AMFConstructSize(frame->width, frame->height));
-      return 0;
-    }
-
-    void AMF_STD_CALL
-    OnSurfaceDataRelease(amf::AMFSurface *pSurface) override {
-      // Nothing
-    }
-
-  private:
-    std::shared_ptr<display_amd_vram_t> display;
-    amf::AMFComponentPtr converter;
-    frame_t hwframe;
-    amf::AMFSurfacePtr hwframe_surface;
-    amf::AMF_SURFACE_FORMAT last_input_format = amf::AMF_SURFACE_UNKNOWN;
-  };
-
-
-  std::unique_ptr<avcodec_encode_device_t>
-  display_amd_vram_t::make_avcodec_encode_device(pix_fmt_e pix_fmt) {
-    if (pix_fmt != platf::pix_fmt_e::nv12 && pix_fmt != platf::pix_fmt_e::p010) {
-      BOOST_LOG(error) << "amd_capture_t doesn't support pixel format ["sv << from_pix_fmt(pix_fmt) << ']';
-      return nullptr;
-    }
-
-    auto device = std::make_unique<amf_d3d_avcodec_encode_device_t>();
-    if (device->init(shared_from_this(), pix_fmt)) {
-      return nullptr;
-    }
-
-    return device;
-  }
 
 /**
    * @brief Get the next frame from the Windows.Graphics.Capture API and copy it into a new snapshot texture.
@@ -1731,49 +1506,122 @@ namespace platf::dxgi {
    */
   capture_e
   display_amd_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
+    BOOST_LOG(error) << "Running snapshot";
     amf::AMFSurfacePtr output;
+    D3D11_TEXTURE2D_DESC desc;
+
     // Check for display configuration change
 
     auto capture_status = dup.next_frame(timeout, (amf::AMFData **) &output);
     if (capture_status != capture_e::ok) {
+      BOOST_LOG(error) << "BAD NEXT FRAME";
       return capture_status;
     }
 
-    if (!pull_free_image_cb(img_out)) {
-      return capture_e::interrupted;
+    texture2d_t src = (ID3D11Texture2D*) output->GetPlaneAt(0)->GetNative();
+    src->GetDesc(&desc);
+
+    BOOST_LOG(debug) << "Output planes count: " << output->GetPlanesCount();
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc Width: " << desc.Width;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc Height: " << desc.Height;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc MipLevels: " << desc.MipLevels;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc ArraySize: " << desc.ArraySize;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc Format: " << desc.Format;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc SampleDesc.Count: " << desc.SampleDesc.Count;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc SampleDesc.Quality: " << desc.SampleDesc.Quality;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc Usage: " << desc.Usage;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc BindFlags: " << desc.BindFlags;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc CPUAccessFlags: " << desc.CPUAccessFlags;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc MiscFlags: " <<  desc.MiscFlags;
+
+    // It's possible for our display enumeration to race with mode changes and result in
+    // mismatched image pool and desktop texture sizes. If this happens, just reinit again.
+    if (desc.Width != width_before_rotation || desc.Height != height_before_rotation) {
+      BOOST_LOG(info) << "Capture size changed ["sv << width << 'x' << height << " -> "sv << desc.Width << 'x' << desc.Height << ']';
+      return capture_e::reinit;
     }
 
-    auto amd_img = (img_amd_t *) img_out.get();
+    // If we don't know the capture format yet, grab it from this texture
+    if (capture_format == DXGI_FORMAT_UNKNOWN) {
+      capture_format = desc.Format;
+      BOOST_LOG(info) << "AMD Capture format ["sv << dxgi_format_to_string(capture_format) << ']';
+    }
 
-    // Since AMF doesn't wait for flip, the flip time on the surface isn't accurate
-    // to compute the host processing time. We'll just use the time we got the frame.
-    amd_img->frame_timestamp = std::chrono::steady_clock::now();
+    // It's also possible for the capture format to change on the fly. If that happens,
+    // reinitialize capture to try format detection again and create new images.
+    if (capture_format != desc.Format) {
+      BOOST_LOG(info) << "AMD Capture format changed ["sv << dxgi_format_to_string(capture_format) << " -> "sv << dxgi_format_to_string(desc.Format) << ']';
+      return capture_e::reinit;
+    }
 
-    amd_img->surface = std::move(output);
+    std::shared_ptr<platf::img_t> img;
+    if (!pull_free_image_cb(img))
+      return capture_e::interrupted;
+
+    auto d3d_img = std::static_pointer_cast<img_d3d_t>(img);
+    d3d_img->blank = false;  // image is always ready for capture
+    if (complete_img(d3d_img.get(), false) == 0) {
+      texture_lock_helper lock_helper(d3d_img->capture_mutex.get());
+      if (lock_helper.lock()) {
+        device_ctx->CopyResource(d3d_img->capture_texture.get(), src.get());
+        BOOST_LOG(error) << "### Snapshot copied resource";
+        d3d_img->capture_texture->GetDesc(&desc);
+        BOOST_LOG(debug) << "Output planes count: " << output->GetPlanesCount();
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc Width: " << desc.Width;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc Height: " << desc.Height;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc MipLevels: " << desc.MipLevels;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc ArraySize: " << desc.ArraySize;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc Format: " << desc.Format;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc SampleDesc.Count: " << desc.SampleDesc.Count;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc SampleDesc.Quality: " << desc.SampleDesc.Quality;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc Usage: " << desc.Usage;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc BindFlags: " << desc.BindFlags;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc CPUAccessFlags: " << desc.CPUAccessFlags;
+        BOOST_LOG(debug) << "D3D11 Texture2D Desc MiscFlags: " <<  desc.MiscFlags;
+      }
+      else {
+        BOOST_LOG(error) << "### Failed to lock capture texture";
+        return capture_e::error;
+      }
+    }
+    else {
+      BOOST_LOG(error) << "### Failed to complete image";
+      return capture_e::error;
+    }
+    img_out = img;
+    if (img_out) {
+      img_out->frame_timestamp = std::chrono::steady_clock::now();
+    }
+
+    BOOST_LOG(error) << "### Snapshot OK";
     return capture_e::ok;
   }
 
-  std::shared_ptr<platf::img_t>
-  display_amd_vram_t::alloc_img() {
-    auto img = std::make_shared<img_amd_t>();
-    img->display = shared_from_this();
-    return img;
-  }
+  // std::shared_ptr<platf::img_t>
+  // display_amd_vram_t::alloc_img() {
+  //   BOOST_LOG(error) << "Running alloc_img";
+  //   auto img = std::make_shared<img_amd_t>();
+  //   img->display = shared_from_this();
+  //   return img;
+  // }
 
-  int
-  display_amd_vram_t::dummy_img(platf::img_t *img_base) {
-    auto img = (img_amd_t *) img_base;
+  // int
+  // display_amd_vram_t::dummy_img(platf::img_t *img_base) {
+  //   BOOST_LOG(error) << "Running dummy_img";
+  //   auto img = (img_amd_t *) img_base;
 
-    auto result = dup.context->AllocSurface(amf::AMF_MEMORY_DX11, (amf::AMF_SURFACE_FORMAT) dup.capture_format, dup.resolution.width, dup.resolution.height, &img->surface);
-    if (result != AMF_OK) {
-      BOOST_LOG(error) << "AllocSurface() failed: "sv << result;
-      return -1;
-    }
-    return 0;
-  }
+  //   auto result = dup.context->AllocSurface(amf::AMF_MEMORY_DX11, (amf::AMF_SURFACE_FORMAT) dup.capture_format, dup.resolution.width, dup.resolution.height, &img->surface);
+  //   BOOST_LOG(info) << "*** AllocSurface format: " << img->surface->GetFormat();
+  //   if (result != AMF_OK) {
+  //     BOOST_LOG(error) << "AllocSurface() failed: "sv << result;
+  //     return -1;
+  //   }
+  //   return 0;
+  // }
 
   capture_e
   display_amd_vram_t::release_snapshot() {
+    BOOST_LOG(error) << "Running release_snapshot";
     return dup.release_frame();
   }
 
@@ -1796,6 +1644,18 @@ namespace platf::dxgi {
     auto frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), frame_qpc);
     D3D11_TEXTURE2D_DESC desc;
     src->GetDesc(&desc);
+
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc Width: " << desc.Width;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc Height: " << desc.Height;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc MipLevels: " << desc.MipLevels;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc ArraySize: " << desc.ArraySize;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc Format: " << desc.Format;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc SampleDesc.Count: " << desc.SampleDesc.Count;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc SampleDesc.Quality: " << desc.SampleDesc.Quality;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc Usage: " << desc.Usage;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc BindFlags: " << desc.BindFlags;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc CPUAccessFlags: " << desc.CPUAccessFlags;
+    BOOST_LOG(debug) << "D3D11 Texture2D Desc MiscFlags: " <<  desc.MiscFlags;
 
     // It's possible for our display enumeration to race with mode changes and result in
     // mismatched image pool and desktop texture sizes. If this happens, just reinit again.

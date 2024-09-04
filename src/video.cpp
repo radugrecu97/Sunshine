@@ -1187,6 +1187,8 @@ namespace video {
 
       auto status = disp->capture(push_captured_image_callback, pull_free_image_callback, &display_cursor);
 
+      BOOST_LOG(debug) << "*** 01";
+
       if (artificial_reinit && status != platf::capture_e::error) {
         status = platf::capture_e::reinit;
 
@@ -1195,6 +1197,7 @@ namespace video {
 
       switch (status) {
         case platf::capture_e::reinit: {
+          BOOST_LOG(debug) << "*** captureThread Reinit";
           reinit_event.raise(true);
 
           // Some classes of images contain references to the display --> display won't delete unless img is deleted
@@ -1268,6 +1271,7 @@ namespace video {
 
   int
   encode_avcodec(int64_t frame_nr, avcodec_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+    BOOST_LOG(debug) << "### running encode_avcodec";
     auto &frame = session.device->frame;
     frame->pts = frame_nr;
 
@@ -1277,7 +1281,9 @@ namespace video {
     auto &vps = session.vps;
 
     // send the frame to the encoder
+    BOOST_LOG(debug) << "### encode_avcodec BEFORE avcodec_send_frame";
     auto ret = avcodec_send_frame(ctx.get(), frame);
+    BOOST_LOG(debug) << "### encode_avcodec AFTER avcodec_send_frame";
     if (ret < 0) {
       char err_str[AV_ERROR_MAX_STRING_SIZE] { 0 };
       BOOST_LOG(error) << "Could not send a frame for encoding: "sv << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, ret);
@@ -1286,14 +1292,17 @@ namespace video {
     }
 
     while (ret >= 0) {
+      BOOST_LOG(debug) << "### encode_avcodec while ret >=0";
       auto packet = std::make_unique<packet_raw_avcodec>();
       auto av_packet = packet.get()->av_packet;
 
       ret = avcodec_receive_packet(ctx.get(), av_packet);
       if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+        BOOST_LOG(debug) << "### encode_avcodec returned "<< ret;
         return 0;
       }
       else if (ret < 0) {
+        BOOST_LOG(error) << "### encode_avcodec returned "<< ret;
         return ret;
       }
 
@@ -1336,6 +1345,7 @@ namespace video {
       packet->replacements = &session.replacements;
       packet->channel_data = channel_data;
       packets->raise(std::move(packet));
+      BOOST_LOG(debug) << "### encode_avcodec moved packet";
     }
 
     return 0;
@@ -2072,6 +2082,7 @@ namespace video {
 
       auto status = disp->capture(push_captured_image_callback, pull_free_image_callback, &display_cursor);
       switch (status) {
+        BOOST_LOG(debug) << "*** 02";
         case platf::capture_e::reinit:
         case platf::capture_e::error:
         case platf::capture_e::ok:
