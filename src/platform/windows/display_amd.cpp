@@ -28,6 +28,7 @@ namespace platf::dxgi {
   }
 
   amd_capture_t::~amd_capture_t() {
+    BOOST_LOG(debug) << "### R.G. ~amd_capture_t()";
     AMF_RESULT result;
     amf::AMFSurfacePtr output;
     // Before terminating the Display Capture component, we need to drain the remaining frames
@@ -35,10 +36,12 @@ namespace platf::dxgi {
     if (result == AMF_OK) {
       do {
         result = captureComp->QueryOutput((amf::AMFData**) &output);
-        Sleep(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       } while (result != AMF_EOF);
     }
     captureComp->Terminate();
+    frcComp->Flush();
+    frcComp->Terminate();
     context->Terminate();
     // FreeLibrary((HMODULE) amfrt_lib.get());
   }
@@ -65,40 +68,54 @@ namespace platf::dxgi {
 
     AMF_RESULT result;
     amf::AMFSurfacePtr capturedSurface;
-
+    int count = 0;
     auto capture_start = std::chrono::steady_clock::now();
     do {
-      BOOST_LOG(debug) << "### R.G. FRC needs more input";
+      // Get capture frame
       do {
         result = captureComp->QueryOutput((amf::AMFData**) &capturedSurface);
         if (result == AMF_REPEAT) {
           if (std::chrono::steady_clock::now() - capture_start >= timeout) {
+            BOOST_LOG(debug) << "### R.G. TIMEOUT captureComp->QueryOutput";
             return platf::capture_e::timeout;
           }
-          Sleep(1);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
       } while (result == AMF_REPEAT);
 
       if (result != AMF_OK) {
-        return capture_e::timeout;
+        BOOST_LOG(debug) << "### R.G. ERROR captureComp->QueryOutput(): " << result;
+        //FIXME THIS MIGHT BE AN ISSUE
+        return capture_e::reinit;
       }
 
+      // Pass the frame to frame convertor
       result = frcComp->SubmitInput(capturedSurface);
 
       if (result == AMF_INPUT_FULL || result == AMF_DECODER_NO_FREE_SURFACES)
       {
         BOOST_LOG(debug) << "### R.G. Couldn't submit input to FRC";
-        Sleep(1); // input queue is full: wait, poll and submit again
       }
 
-      result = frcComp->QueryOutput(out);
-      BOOST_LOG(debug) << "### R.G. Trying to query FRC";
+      if (result == AMF_INVALID_FORMAT || result == AMF_INVALID_DATA_TYPE)
+      {
+        BOOST_LOG(debug) << "### R.G. Input and Output formats don't match. Reinit";
+        return capture_e::reinit;
+      }
 
       if (result != AMF_OK) {
-        return capture_e::timeout;
+        BOOST_LOG(debug) << "### R.G. ERROR SubmitInput(): " << result;
       }
 
-      BOOST_LOG(debug) << "### R.G. Successfully queried FRC";
+      // Get frame output
+      result = frcComp->QueryOutput(out);
+
+      if (result != AMF_OK) {
+        BOOST_LOG(debug) << "### R.G. Cant frcComp->QueryOutput() #1 " << result;
+      }
+
+      // BOOST_LOG(debug) << "### R.G. frcComp->QueryOutput() loop: " << count << " result: " << result;
+
 
     } while (result == AMF_REPEAT);
 
@@ -198,8 +215,10 @@ namespace platf::dxgi {
 
     // Set parameters for non-blocking capture
     captureComp->SetProperty(AMF_DISPLAYCAPTURE_MONITOR_INDEX, output_index);
-    captureComp->SetProperty(AMF_DISPLAYCAPTURE_FRAMERATE, AMFConstructRate(config.framerate/2, 1));
-    captureComp->SetProperty(AMF_DISPLAYCAPTURE_MODE, AMF_DISPLAYCAPTURE_MODE_WAIT_FOR_PRESENT);
+    captureComp->SetProperty(AMF_DISPLAYCAPTURE_FRAMERATE, AMFConstructRate(60, 1));
+    BOOST_LOG(info) << "Framerate requested: " << config.framerate;
+
+    captureComp->SetProperty(AMF_DISPLAYCAPTURE_MODE, AMF_DISPLAYCAPTURE_MODE_KEEP_FRAMERATE);
     captureComp->SetProperty(AMF_DISPLAYCAPTURE_DUPLICATEOUTPUT, true);
 
     // Initialize capture
@@ -213,7 +232,7 @@ namespace platf::dxgi {
 
     do {
       result = captureComp->QueryOutput((amf::AMFData**) &output);
-      Sleep(1);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     } while (result != AMF_OK);
 
 
@@ -231,11 +250,13 @@ namespace platf::dxgi {
     }
 
     frcComp->SetProperty(AMF_FRC_ENGINE_TYPE, FRC_ENGINE_DX11);
-    frcComp->SetProperty(AMF_FRC_MODE, FRC_ON);
-    frcComp->SetProperty(AMF_FRC_ENABLE_FALLBACK, false);
+    frcComp->SetProperty(AMF_FRC_MODE, FRC_ONLY_INTERPOLATED);
+    frcComp->SetProperty(AMF_FRC_ENABLE_FALLBACK, true);
     frcComp->SetProperty(AMF_FRC_INDICATOR, true);
-    frcComp->SetProperty(AMF_FRC_PROFILE, FRC_PROFILE_HIGH);
+    frcComp->SetProperty(AMF_FRC_PROFILE, FRC_PROFILE_SUPER);
     frcComp->SetProperty(AMF_FRC_MV_SEARCH_MODE, FRC_MV_SEARCH_NATIVE);
+    frcComp->SetProperty(AMF_FRC_USE_FUTURE_FRAME, true);
+
 
     result = frcComp->Init((amf::AMF_SURFACE_FORMAT) capture_format, resolution.width, resolution.height);
     if (result != AMF_OK) {
