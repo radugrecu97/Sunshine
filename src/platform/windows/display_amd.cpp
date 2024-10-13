@@ -15,6 +15,7 @@ extern "C" {
 #include "src/video.h"
 
 #include <AMF/components/DisplayCapture.h>
+#include <AMF/components/FRC.h>
 #include <AMF/components/VideoConverter.h>
 #include <AMF/core/Trace.h>
 
@@ -63,20 +64,49 @@ namespace platf::dxgi {
     release_frame();
 
     AMF_RESULT result;
+    amf::AMFSurfacePtr capturedSurface;
+
     auto capture_start = std::chrono::steady_clock::now();
     do {
-      result = captureComp->QueryOutput(out);
-      if (result == AMF_REPEAT) {
-        if (std::chrono::steady_clock::now() - capture_start >= timeout) {
-          return platf::capture_e::timeout;
+      BOOST_LOG(debug) << "### R.G. FRC needs more input";
+      do {
+        result = captureComp->QueryOutput((amf::AMFData**) &capturedSurface);
+        if (result == AMF_REPEAT) {
+          if (std::chrono::steady_clock::now() - capture_start >= timeout) {
+            return platf::capture_e::timeout;
+          }
+          Sleep(1);
         }
-        Sleep(1);
+      } while (result == AMF_REPEAT);
+
+      if (result != AMF_OK) {
+        return capture_e::timeout;
       }
+
+      result = frcComp->SubmitInput(capturedSurface);
+
+      if (result == AMF_INPUT_FULL || result == AMF_DECODER_NO_FREE_SURFACES)
+      {
+        BOOST_LOG(debug) << "### R.G. Couldn't submit input to FRC";
+        Sleep(1); // input queue is full: wait, poll and submit again
+      }
+
+      result = frcComp->QueryOutput(out);
+      BOOST_LOG(debug) << "### R.G. Trying to query FRC";
+
+      if (result != AMF_OK) {
+        return capture_e::timeout;
+      }
+
+      BOOST_LOG(debug) << "### R.G. Successfully queried FRC";
+
     } while (result == AMF_REPEAT);
 
     if (result != AMF_OK) {
       return capture_e::timeout;
     }
+
+
     return capture_e::ok;
   }
 
@@ -126,6 +156,17 @@ namespace platf::dxgi {
     DXGI_ADAPTER_DESC adapter_desc;
     display->adapter->GetDesc(&adapter_desc);
 
+    amf::AMFTrace* traceAMF;
+    amf_factory->GetTrace(&traceAMF);
+    traceAMF->SetGlobalLevel(AMF_TRACE_DEBUG);
+    traceAMF->EnableWriter(AMF_TRACE_WRITER_FILE, true);
+    traceAMF->SetWriterLevel(AMF_TRACE_WRITER_FILE, AMF_TRACE_DEBUG);
+    traceAMF->SetPath(L"D:/amflog.txt");
+
+    amf::AMFDebug* debugAMF;
+    amf_factory->GetDebug(&debugAMF);
+    debugAMF->AssertsEnable(false);
+
     // Bail if this is not an AMD GPU
     if (adapter_desc.VendorId != 0x1002) {
       return -1;
@@ -157,7 +198,7 @@ namespace platf::dxgi {
 
     // Set parameters for non-blocking capture
     captureComp->SetProperty(AMF_DISPLAYCAPTURE_MONITOR_INDEX, output_index);
-    captureComp->SetProperty(AMF_DISPLAYCAPTURE_FRAMERATE, AMFConstructRate(config.framerate, 1));
+    captureComp->SetProperty(AMF_DISPLAYCAPTURE_FRAMERATE, AMFConstructRate(config.framerate/2, 1));
     captureComp->SetProperty(AMF_DISPLAYCAPTURE_MODE, AMF_DISPLAYCAPTURE_MODE_WAIT_FOR_PRESENT);
     captureComp->SetProperty(AMF_DISPLAYCAPTURE_DUPLICATEOUTPUT, true);
 
@@ -168,11 +209,39 @@ namespace platf::dxgi {
       return -1;
     }
 
+    amf::AMFSurfacePtr output;
+
+    do {
+      result = captureComp->QueryOutput((amf::AMFData**) &output);
+      Sleep(1);
+    } while (result != AMF_OK);
+
+
     captureComp->GetProperty(AMF_DISPLAYCAPTURE_FORMAT, &(capture_format));
     captureComp->GetProperty(AMF_DISPLAYCAPTURE_RESOLUTION, &(resolution));
+    BOOST_LOG(info) << "Desktop capture format "sv << output->GetFormat();
     BOOST_LOG(info) << "Desktop resolution ["sv << resolution.width << 'x' << resolution.height << ']';
 
     BOOST_LOG(info) << "Using AMD Direct Capture API for display capture"sv;
+
+    result = amf_factory->CreateComponent(context, AMFFRC, &(frcComp));
+    if (result != AMF_OK) {
+      BOOST_LOG(error) << "CreateComponent(AMFFRC) failed: "sv << result;
+      return -1;
+    }
+
+    frcComp->SetProperty(AMF_FRC_ENGINE_TYPE, FRC_ENGINE_DX11);
+    frcComp->SetProperty(AMF_FRC_MODE, FRC_ON);
+    frcComp->SetProperty(AMF_FRC_ENABLE_FALLBACK, false);
+    frcComp->SetProperty(AMF_FRC_INDICATOR, true);
+    frcComp->SetProperty(AMF_FRC_PROFILE, FRC_PROFILE_HIGH);
+    frcComp->SetProperty(AMF_FRC_MV_SEARCH_MODE, FRC_MV_SEARCH_NATIVE);
+
+    result = frcComp->Init((amf::AMF_SURFACE_FORMAT) capture_format, resolution.width, resolution.height);
+    if (result != AMF_OK) {
+      BOOST_LOG(error) << "FRC::Init() failed: "sv << result;
+      return -1;
+    }
 
     return 0;
   }

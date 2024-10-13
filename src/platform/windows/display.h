@@ -464,6 +464,7 @@ namespace platf::dxgi {
 
     amf::AMFContextPtr context;
     amf::AMFComponentPtr captureComp;
+    amf::AMFComponentPtr frcComp;
     amf::AMFSurfacePtr capturedSurface;
     amf_int64 capture_format;
     AMFSize resolution;
