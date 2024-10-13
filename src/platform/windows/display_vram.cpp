@@ -1661,14 +1661,14 @@ namespace platf::dxgi {
       return capture_status;
     }
     dup.capturedSurface = output;
-
-    texture2d_t src = (ID3D11Texture2D*) dup.capturedSurface->GetPlaneAt(0)->GetNative();
+    texture2d_t src = (ID3D11Texture2D*) output->GetPlaneAt(0)->GetNative();
     src->GetDesc(&desc);
 
     // It's possible for our display enumeration to race with mode changes and result in
     // mismatched image pool and desktop texture sizes. If this happens, just reinit again.
     if (desc.Width != width_before_rotation || desc.Height != height_before_rotation) {
       BOOST_LOG(info) << "Capture size changed ["sv << width << 'x' << height << " -> "sv << desc.Width << 'x' << desc.Height << ']';
+      src.release();
       return capture_e::reinit;
     }
 
@@ -1682,6 +1682,7 @@ namespace platf::dxgi {
     // reinitialize capture to try format detection again and create new images.
     if (capture_format != desc.Format) {
       BOOST_LOG(info) << "AMD Capture format changed ["sv << dxgi_format_to_string(capture_format) << " -> "sv << dxgi_format_to_string(desc.Format) << ']';
+      src.release();
       return capture_e::reinit;
     }
 
@@ -1709,6 +1710,7 @@ namespace platf::dxgi {
     }
 
     src.release();
+    // dup.capturedSurface = nullptr;
     return capture_e::ok;
   }
 

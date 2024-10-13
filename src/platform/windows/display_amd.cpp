@@ -28,21 +28,18 @@ namespace platf::dxgi {
 
   amd_capture_t::~amd_capture_t() {
     AMF_RESULT result;
-
+    amf::AMFSurfacePtr output;
     // Before terminating the Display Capture component, we need to drain the remaining frames
     result = captureComp->Drain();
     if (result == AMF_OK) {
       do {
-        result = captureComp->QueryOutput((amf::AMFData**) &capturedSurface);
+        result = captureComp->QueryOutput((amf::AMFData**) &output);
         Sleep(1);
       } while (result != AMF_EOF);
     }
     captureComp->Terminate();
-
     context->Terminate();
-    captureComp = nullptr;
-    context = nullptr;
-    capturedSurface = nullptr;
+    // FreeLibrary((HMODULE) amfrt_lib.get());
   }
 
   capture_e
