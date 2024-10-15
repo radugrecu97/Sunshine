@@ -1644,7 +1644,7 @@ namespace platf::dxgi {
 
 
   /**
-   * @brief Get the next frame from the Windows.Graphics.Capture API and copy it into a new snapshot texture.
+   * @brief Get the next frame from the AMF API and copy it into a new snapshot texture.
    * @param pull_free_image_cb call this to get a new free image from the video subsystem.
    * @param img_out the captured frame is returned here
    * @param timeout how long to wait for the next frame
@@ -1652,15 +1652,47 @@ namespace platf::dxgi {
    */
   capture_e
   display_amd_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
-    amf::AMFSurfacePtr output;
+    amf::AMFSurfacePtr capturedFrame = nullptr, output = nullptr;
     D3D11_TEXTURE2D_DESC desc;
 
-    // Check for display configuration change
-    auto capture_status = dup.next_frame(timeout, (amf::AMFData **) &output);
-    if (capture_status != capture_e::ok) {
-      return capture_status;
+    AMF_RESULT result;
+
+    if (dup.capturedSurface != nullptr)
+    {
+      BOOST_LOG(debug) << "### R.G. 2nd frame";
+      output = dup.capturedSurface;
+      dup.capturedSurface = nullptr;
     }
-    dup.capturedSurface = output;
+    else
+    {
+      BOOST_LOG(debug) << "### R.G. 1st frame";
+      auto capture_status = dup.next_frame(timeout, (amf::AMFData **) &capturedFrame);
+      if (capture_status != capture_e::ok) {
+        return capture_status;
+      }
+
+      // Pass the frame to frame convertor
+      result = dup.frcComp->SubmitInput(capturedFrame);
+
+      if (result == AMF_INPUT_FULL || result == AMF_DECODER_NO_FREE_SURFACES)
+      {
+        BOOST_LOG(debug) << "### R.G. Couldn't submit input to FRC";
+      }
+      else if (result == AMF_INVALID_FORMAT || result == AMF_INVALID_DATA_TYPE)
+      {
+        BOOST_LOG(debug) << "### R.G. Input and Output formats don't match. Reinit";
+        return capture_e::reinit;
+      }
+      else if (result != AMF_OK) {
+        BOOST_LOG(debug) << "### R.G. ERROR SubmitInput(): " << result;
+        return capture_e::reinit;
+      }
+
+      result = dup.frcComp->QueryOutput((amf::AMFData**) &output);
+
+      result = dup.frcComp->QueryOutput((amf::AMFData**) &dup.capturedSurface);
+    }
+
     texture2d_t src = (ID3D11Texture2D*) output->GetPlaneAt(0)->GetNative();
     src->GetDesc(&desc);
 
@@ -1710,13 +1742,12 @@ namespace platf::dxgi {
     }
 
     src.release();
-    // dup.capturedSurface = nullptr;
     return capture_e::ok;
   }
 
   capture_e
   display_amd_vram_t::release_snapshot() {
-    dup.release_frame();
+    // dup.release_frame();
     return capture_e::ok;
   }
 
