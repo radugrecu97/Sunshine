@@ -84,7 +84,7 @@ namespace platf::dxgi {
     if (result != AMF_OK) {
       BOOST_LOG(debug) << "### R.G. next_frame ERROR captureComp->QueryOutput(): " << result;
       //FIXME THIS MIGHT BE AN ISSUE
-      return capture_e::reinit;
+      return capture_e::timeout;
     }
 
     return capture_e::ok;
