@@ -71,6 +71,10 @@ namespace config {
       int vt_coder;
     } vt;
 
+    struct {
+      bool strict_rc_buffer;
+    } vaapi;
+
     std::string capture;
     std::string encoder;
     std::string adapter_name;
@@ -93,9 +97,6 @@ namespace config {
     std::string file_apps;
 
     int fec_percentage;
-
-    // max unique instances of video and audio streams
-    int channels;
 
     // Video encryption settings for LAN and WAN streams
     int lan_encryption_mode;

@@ -44,7 +44,6 @@ class @PROJECT_NAME@ < Formula
     depends_on "libdrm"
     depends_on "libnotify"
     depends_on "libva"
-    depends_on "libvdpau"
     depends_on "libx11"
     depends_on "libxcb"
     depends_on "libxcursor"
@@ -105,6 +104,8 @@ class @PROJECT_NAME@ < Formula
       ohai "Linking against ICU libraries at: #{icu4c_lib_path}"
     end
 
+    args << "-DCUDA_FAIL_ON_MISSING=OFF" if OS.linux?
+
     system "cmake", "-S", ".", "-B", "build", *std_cmake_args, *args
 
     cd "build" do
@@ -113,6 +114,9 @@ class @PROJECT_NAME@ < Formula
 
       bin.install "tests/test_sunshine"
     end
+
+    # codesign the binary on intel macs
+    system "codesign", "-s", "-", "--force", "--deep", bin/"sunshine" if OS.mac? && Hardware::CPU.intel?
 
     bin.install "src_assets/linux/misc/postinst" if OS.linux?
   end

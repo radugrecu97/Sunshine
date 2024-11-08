@@ -377,6 +377,10 @@ namespace config {
       -1,
     },  // vt
 
+    {
+      false,  // strict_rc_buffer
+    },  // vaapi
+
     {},  // capture
     {},  // encoder
     {},  // adapter_name
@@ -395,7 +399,6 @@ namespace config {
     APPS_JSON_PATH,
 
     20,  // fecPercentage
-    1,  // channels
 
     ENCRYPTION_MODE_NEVER,  // lan_encryption_mode
     ENCRYPTION_MODE_OPPORTUNISTIC,  // wan_encryption_mode
@@ -1015,6 +1018,8 @@ namespace config {
     int_f(vars, "vt_software", video.vt.vt_require_sw, vt::force_software_from_view);
     int_f(vars, "vt_realtime", video.vt.vt_realtime, vt::rt_from_view);
 
+    bool_f(vars, "vaapi_strict_rc_buffer", video.vaapi.strict_rc_buffer);
+
     string_f(vars, "capture", video.capture);
     string_f(vars, "encoder", video.encoder);
     string_f(vars, "adapter_name", video.adapter_name);
@@ -1045,8 +1050,6 @@ namespace config {
     if (to != -1) {
       stream.ping_timeout = std::chrono::milliseconds(to);
     }
-
-    int_between_f(vars, "channels", stream.channels, { 1, std::numeric_limits<int>::max() });
 
     int_between_f(vars, "lan_encryption_mode", stream.lan_encryption_mode, { 0, 2 });
     int_between_f(vars, "wan_encryption_mode", stream.wan_encryption_mode, { 0, 2 });
